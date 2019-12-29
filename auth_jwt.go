@@ -3,25 +3,26 @@ package jwt
 import (
 	"crypto/rsa"
 	"errors"
+	"github.com/astaxie/beego"
 	"io/ioutil"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/astaxie/beego/context"
 	"github.com/dgrijalva/jwt-go"
-	"github.com/gin-gonic/gin"
 )
 
 // MapClaims type that uses the map[string]interface{} for JSON decoding
 // This is the default claims type if you don't supply one
 type MapClaims map[string]interface{}
 
-// GinJWTMiddleware provides a Json-Web-Token authentication implementation. On failure, a 401 HTTP response
+// BeegoJWTFilter provides a Json-Web-Token authentication implementation. On failure, a 401 HTTP response
 // is returned. On success, the wrapped middleware is called, and the userID is made available as
 // c.Get("userID").(string).
 // Users can get a token by posting a json request to LoginHandler. The token then needs to be passed in
 // the Authentication header. Example: Authorization:Bearer XXX_TOKEN_XXX
-type GinJWTMiddleware struct {
+type BeegoJWTFilter struct {
 	// Realm name to display to the user. Required.
 	Realm string
 
@@ -44,12 +45,12 @@ type GinJWTMiddleware struct {
 	// Callback function that should perform the authentication of the user based on login info.
 	// Must return user data as user identifier, it will be stored in Claim Array. Required.
 	// Check error (e) to determine the appropriate error message.
-	Authenticator func(c *gin.Context) (interface{}, error)
+	Authenticator func(c *context.Context) (interface{}, error)
 
 	// Callback function that should perform the authorization of the authenticated user. Called
 	// only after an authentication success. Must return true on success, false on failure.
 	// Optional, default to success.
-	Authorizator func(data interface{}, c *gin.Context) bool
+	Authorizator func(data interface{}, c *context.Context) bool
 
 	// Callback function that will be called during login.
 	// Using this function it is possible to add additional payload data to the webtoken.
@@ -60,19 +61,19 @@ type GinJWTMiddleware struct {
 	PayloadFunc func(data interface{}) MapClaims
 
 	// User can define own Unauthorized func.
-	Unauthorized func(*gin.Context, int, string)
+	Unauthorized func(*context.Context, int, string)
 
 	// User can define own LoginResponse func.
-	LoginResponse func(*gin.Context, int, string, time.Time)
+	LoginResponse func(*context.Context, int, string, time.Time)
 
 	// User can define own LogoutResponse func.
-	LogoutResponse func(*gin.Context, int)
+	LogoutResponse func(*context.Context, int)
 
 	// User can define own RefreshResponse func.
-	RefreshResponse func(*gin.Context, int, string, time.Time)
+	RefreshResponse func(*context.Context, int, string, time.Time)
 
 	// Set the identity handler function
-	IdentityHandler func(*gin.Context) interface{}
+	IdentityHandler func(*context.Context) interface{}
 
 	// Set the identity key
 	IdentityKey string
@@ -94,7 +95,7 @@ type GinJWTMiddleware struct {
 
 	// HTTP Status messages for when something in the JWT middleware fails.
 	// Check error (e) to determine the appropriate error message.
-	HTTPStatusMessageFunc func(e error, c *gin.Context) string
+	HTTPStatusMessageFunc func(e error, c *context.Context) string
 
 	// Private key file for asymmetric algorithms
 	PrivKeyFile string
@@ -192,8 +193,8 @@ var (
 	IdentityKey = "identity"
 )
 
-// New for check error with GinJWTMiddleware
-func New(m *GinJWTMiddleware) (*GinJWTMiddleware, error) {
+// New for check error with BeegoJWTFilter
+func New(m *BeegoJWTFilter) (*BeegoJWTFilter, error) {
 	if err := m.MiddlewareInit(); err != nil {
 		return nil, err
 	}
@@ -201,7 +202,7 @@ func New(m *GinJWTMiddleware) (*GinJWTMiddleware, error) {
 	return m, nil
 }
 
-func (mw *GinJWTMiddleware) readKeys() error {
+func (mw *BeegoJWTFilter) readKeys() error {
 	err := mw.privateKey()
 	if err != nil {
 		return err
@@ -213,7 +214,7 @@ func (mw *GinJWTMiddleware) readKeys() error {
 	return nil
 }
 
-func (mw *GinJWTMiddleware) privateKey() error {
+func (mw *BeegoJWTFilter) privateKey() error {
 	keyData, err := ioutil.ReadFile(mw.PrivKeyFile)
 	if err != nil {
 		return ErrNoPrivKeyFile
@@ -226,7 +227,7 @@ func (mw *GinJWTMiddleware) privateKey() error {
 	return nil
 }
 
-func (mw *GinJWTMiddleware) publicKey() error {
+func (mw *BeegoJWTFilter) publicKey() error {
 	keyData, err := ioutil.ReadFile(mw.PubKeyFile)
 	if err != nil {
 		return ErrNoPubKeyFile
@@ -239,7 +240,7 @@ func (mw *GinJWTMiddleware) publicKey() error {
 	return nil
 }
 
-func (mw *GinJWTMiddleware) usingPublicKeyAlgo() bool {
+func (mw *BeegoJWTFilter) usingPublicKeyAlgo() bool {
 	switch mw.SigningAlgorithm {
 	case "RS256", "RS512", "RS384":
 		return true
@@ -248,7 +249,7 @@ func (mw *GinJWTMiddleware) usingPublicKeyAlgo() bool {
 }
 
 // MiddlewareInit initialize jwt configs.
-func (mw *GinJWTMiddleware) MiddlewareInit() error {
+func (mw *BeegoJWTFilter) MiddlewareInit() error {
 
 	if mw.TokenLookup == "" {
 		mw.TokenLookup = "header:Authorization"
@@ -272,45 +273,45 @@ func (mw *GinJWTMiddleware) MiddlewareInit() error {
 	}
 
 	if mw.Authorizator == nil {
-		mw.Authorizator = func(data interface{}, c *gin.Context) bool {
+		mw.Authorizator = func(data interface{}, c *context.Context) bool {
 			return true
 		}
 	}
 
 	if mw.Unauthorized == nil {
-		mw.Unauthorized = func(c *gin.Context, code int, message string) {
-			c.JSON(code, gin.H{
+		mw.Unauthorized = func(c *context.Context, code int, message string) {
+			_ = c.Output.JSON(map[string]interface{}{
 				"code":    code,
 				"message": message,
-			})
+			}, false, false)
 		}
 	}
 
 	if mw.LoginResponse == nil {
-		mw.LoginResponse = func(c *gin.Context, code int, token string, expire time.Time) {
-			c.JSON(http.StatusOK, gin.H{
+		mw.LoginResponse = func(c *context.Context, code int, token string, expire time.Time) {
+			_ = c.Output.JSON(map[string]interface{}{
 				"code":   http.StatusOK,
 				"token":  token,
 				"expire": expire.Format(time.RFC3339),
-			})
+			}, false, false)
 		}
 	}
 
 	if mw.LogoutResponse == nil {
-		mw.LogoutResponse = func(c *gin.Context, code int) {
-			c.JSON(http.StatusOK, gin.H{
+		mw.LogoutResponse = func(c *context.Context, code int) {
+			_ = c.Output.JSON(map[string]interface{}{
 				"code": http.StatusOK,
-			})
+			}, false, false)
 		}
 	}
 
 	if mw.RefreshResponse == nil {
-		mw.RefreshResponse = func(c *gin.Context, code int, token string, expire time.Time) {
-			c.JSON(http.StatusOK, gin.H{
+		mw.RefreshResponse = func(c *context.Context, code int, token string, expire time.Time) {
+			_ = c.Output.JSON(map[string]interface{}{
 				"code":   http.StatusOK,
 				"token":  token,
 				"expire": expire.Format(time.RFC3339),
-			})
+			}, false, false)
 		}
 	}
 
@@ -319,14 +320,14 @@ func (mw *GinJWTMiddleware) MiddlewareInit() error {
 	}
 
 	if mw.IdentityHandler == nil {
-		mw.IdentityHandler = func(c *gin.Context) interface{} {
+		mw.IdentityHandler = func(c *context.Context) interface{} {
 			claims := ExtractClaims(c)
 			return claims[mw.IdentityKey]
 		}
 	}
 
 	if mw.HTTPStatusMessageFunc == nil {
-		mw.HTTPStatusMessageFunc = func(e error, c *gin.Context) string {
+		mw.HTTPStatusMessageFunc = func(e error, c *context.Context) string {
 			return e.Error()
 		}
 	}
@@ -349,14 +350,14 @@ func (mw *GinJWTMiddleware) MiddlewareInit() error {
 	return nil
 }
 
-// MiddlewareFunc makes GinJWTMiddleware implement the Middleware interface.
-func (mw *GinJWTMiddleware) MiddlewareFunc() gin.HandlerFunc {
-	return func(c *gin.Context) {
+// MiddlewareFunc makes BeegoJWTFilter implement the Middleware interface.
+func (mw *BeegoJWTFilter) MiddlewareFunc() beego.FilterFunc {
+	return func(c *context.Context) {
 		mw.middlewareImpl(c)
 	}
 }
 
-func (mw *GinJWTMiddleware) middlewareImpl(c *gin.Context) {
+func (mw *BeegoJWTFilter) middlewareImpl(c *context.Context) {
 	claims, err := mw.GetClaimsFromJWT(c)
 	if err != nil {
 		mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(err, c))
@@ -378,23 +379,21 @@ func (mw *GinJWTMiddleware) middlewareImpl(c *gin.Context) {
 		return
 	}
 
-	c.Set("JWT_PAYLOAD", claims)
+	c.Input.SetData("JWT_PAYLOAD", claims)
 	identity := mw.IdentityHandler(c)
 
 	if identity != nil {
-		c.Set(mw.IdentityKey, identity)
+		c.Input.SetData(mw.IdentityKey, identity)
 	}
 
 	if !mw.Authorizator(identity, c) {
 		mw.unauthorized(c, http.StatusForbidden, mw.HTTPStatusMessageFunc(ErrForbidden, c))
 		return
 	}
-
-	c.Next()
 }
 
 // GetClaimsFromJWT get claims from JWT token
-func (mw *GinJWTMiddleware) GetClaimsFromJWT(c *gin.Context) (MapClaims, error) {
+func (mw *BeegoJWTFilter) GetClaimsFromJWT(c *context.Context) (MapClaims, error) {
 	token, err := mw.ParseToken(c)
 
 	if err != nil {
@@ -402,8 +401,12 @@ func (mw *GinJWTMiddleware) GetClaimsFromJWT(c *gin.Context) (MapClaims, error) 
 	}
 
 	if mw.SendAuthorization {
-		if v, ok := c.Get("JWT_TOKEN"); ok {
-			c.Header("Authorization", mw.TokenHeadName+" "+v.(string))
+		v := c.Input.GetData("JWT_TOKEN")
+		if v == nil {
+			v = ""
+		}
+		if s, ok := v.(string); ok {
+			c.Output.Header("Authorization", mw.TokenHeadName+" "+s)
 		}
 	}
 
@@ -418,7 +421,7 @@ func (mw *GinJWTMiddleware) GetClaimsFromJWT(c *gin.Context) (MapClaims, error) 
 // LoginHandler can be used by clients to get a jwt token.
 // Payload needs to be json in the form of {"username": "USERNAME", "password": "PASSWORD"}.
 // Reply will be of the form {"token": "TOKEN"}.
-func (mw *GinJWTMiddleware) LoginHandler(c *gin.Context) {
+func (mw *BeegoJWTFilter) LoginHandler(c *context.Context) {
 	if mw.Authenticator == nil {
 		mw.unauthorized(c, http.StatusInternalServerError, mw.HTTPStatusMessageFunc(ErrMissingAuthenticatorFunc, c))
 		return
@@ -469,7 +472,7 @@ func (mw *GinJWTMiddleware) LoginHandler(c *gin.Context) {
 }
 
 // LogoutHandler can be used by clients to remove the jwt cookie (if set)
-func (mw *GinJWTMiddleware) LogoutHandler(c *gin.Context) {
+func (mw *BeegoJWTFilter) LogoutHandler(c *context.Context) {
 	// delete auth cookie
 	if mw.SendCookie {
 		c.SetCookie(
@@ -486,7 +489,7 @@ func (mw *GinJWTMiddleware) LogoutHandler(c *gin.Context) {
 	mw.LogoutResponse(c, http.StatusOK)
 }
 
-func (mw *GinJWTMiddleware) signedString(token *jwt.Token) (string, error) {
+func (mw *BeegoJWTFilter) signedString(token *jwt.Token) (string, error) {
 	var tokenString string
 	var err error
 	if mw.usingPublicKeyAlgo() {
@@ -498,9 +501,9 @@ func (mw *GinJWTMiddleware) signedString(token *jwt.Token) (string, error) {
 }
 
 // RefreshHandler can be used to refresh a token. The token still needs to be valid on refresh.
-// Shall be put under an endpoint that is using the GinJWTMiddleware.
+// Shall be put under an endpoint that is using the BeegoJWTFilter.
 // Reply will be of the form {"token": "TOKEN"}.
-func (mw *GinJWTMiddleware) RefreshHandler(c *gin.Context) {
+func (mw *BeegoJWTFilter) RefreshHandler(c *context.Context) {
 	tokenString, expire, err := mw.RefreshToken(c)
 	if err != nil {
 		mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(err, c))
@@ -511,7 +514,7 @@ func (mw *GinJWTMiddleware) RefreshHandler(c *gin.Context) {
 }
 
 // RefreshToken refresh token and check if token is expired
-func (mw *GinJWTMiddleware) RefreshToken(c *gin.Context) (string, time.Time, error) {
+func (mw *BeegoJWTFilter) RefreshToken(c *context.Context) (string, time.Time, error) {
 	claims, err := mw.CheckIfTokenExpire(c)
 	if err != nil {
 		return "", time.Now(), err
@@ -552,7 +555,7 @@ func (mw *GinJWTMiddleware) RefreshToken(c *gin.Context) (string, time.Time, err
 }
 
 // CheckIfTokenExpire check if token expire
-func (mw *GinJWTMiddleware) CheckIfTokenExpire(c *gin.Context) (jwt.MapClaims, error) {
+func (mw *BeegoJWTFilter) CheckIfTokenExpire(c *context.Context) (jwt.MapClaims, error) {
 	token, err := mw.ParseToken(c)
 
 	if err != nil {
@@ -579,7 +582,7 @@ func (mw *GinJWTMiddleware) CheckIfTokenExpire(c *gin.Context) (jwt.MapClaims, e
 }
 
 // TokenGenerator method that clients can use to get a jwt token.
-func (mw *GinJWTMiddleware) TokenGenerator(data interface{}) (string, time.Time, error) {
+func (mw *BeegoJWTFilter) TokenGenerator(data interface{}) (string, time.Time, error) {
 	token := jwt.New(jwt.GetSigningMethod(mw.SigningAlgorithm))
 	claims := token.Claims.(jwt.MapClaims)
 
@@ -600,7 +603,7 @@ func (mw *GinJWTMiddleware) TokenGenerator(data interface{}) (string, time.Time,
 	return tokenString, expire, nil
 }
 
-func (mw *GinJWTMiddleware) jwtFromHeader(c *gin.Context, key string) (string, error) {
+func (mw *BeegoJWTFilter) jwtFromHeader(c *context.Context, key string) (string, error) {
 	authHeader := c.Request.Header.Get(key)
 
 	if authHeader == "" {
@@ -615,8 +618,8 @@ func (mw *GinJWTMiddleware) jwtFromHeader(c *gin.Context, key string) (string, e
 	return parts[1], nil
 }
 
-func (mw *GinJWTMiddleware) jwtFromQuery(c *gin.Context, key string) (string, error) {
-	token := c.Query(key)
+func (mw *BeegoJWTFilter) jwtFromQuery(c *context.Context, key string) (string, error) {
+	token := c.Input.Query(key)
 
 	if token == "" {
 		return "", ErrEmptyQueryToken
@@ -625,8 +628,8 @@ func (mw *GinJWTMiddleware) jwtFromQuery(c *gin.Context, key string) (string, er
 	return token, nil
 }
 
-func (mw *GinJWTMiddleware) jwtFromCookie(c *gin.Context, key string) (string, error) {
-	cookie, _ := c.Cookie(key)
+func (mw *BeegoJWTFilter) jwtFromCookie(c *context.Context, key string) (string, error) {
+	cookie := c.Input.Cookie(key)
 
 	if cookie == "" {
 		return "", ErrEmptyCookieToken
@@ -635,8 +638,8 @@ func (mw *GinJWTMiddleware) jwtFromCookie(c *gin.Context, key string) (string, e
 	return cookie, nil
 }
 
-func (mw *GinJWTMiddleware) jwtFromParam(c *gin.Context, key string) (string, error) {
-	token := c.Param(key)
+func (mw *BeegoJWTFilter) jwtFromParam(c *context.Context, key string) (string, error) {
+	token := c.Input.Param(key)
 
 	if token == "" {
 		return "", ErrEmptyParamToken
@@ -646,7 +649,7 @@ func (mw *GinJWTMiddleware) jwtFromParam(c *gin.Context, key string) (string, er
 }
 
 // ParseToken parse jwt token from gin context
-func (mw *GinJWTMiddleware) ParseToken(c *gin.Context) (*jwt.Token, error) {
+func (mw *BeegoJWTFilter) ParseToken(c *context.Context) (*jwt.Token, error) {
 	var token string
 	var err error
 
@@ -683,14 +686,14 @@ func (mw *GinJWTMiddleware) ParseToken(c *gin.Context) (*jwt.Token, error) {
 		}
 
 		// save token string if vaild
-		c.Set("JWT_TOKEN", token)
+		c.Input.SetData("JWT_TOKEN", token)
 
 		return mw.Key, nil
 	})
 }
 
 // ParseTokenString parse jwt token string
-func (mw *GinJWTMiddleware) ParseTokenString(token string) (*jwt.Token, error) {
+func (mw *BeegoJWTFilter) ParseTokenString(token string) (*jwt.Token, error) {
 	return jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
 		if jwt.GetSigningMethod(mw.SigningAlgorithm) != t.Method {
 			return nil, ErrInvalidSigningAlgorithm
@@ -703,19 +706,19 @@ func (mw *GinJWTMiddleware) ParseTokenString(token string) (*jwt.Token, error) {
 	})
 }
 
-func (mw *GinJWTMiddleware) unauthorized(c *gin.Context, code int, message string) {
-	c.Header("WWW-Authenticate", "JWT realm="+mw.Realm)
+func (mw *BeegoJWTFilter) unauthorized(c *context.Context, code int, message string) {
+	c.Output.Header("WWW-Authenticate", "JWT realm="+mw.Realm)
 	if !mw.DisabledAbort {
-		c.Abort()
+		c.Abort(http.StatusOK, "")
 	}
 
 	mw.Unauthorized(c, code, message)
 }
 
 // ExtractClaims help to extract the JWT claims
-func ExtractClaims(c *gin.Context) MapClaims {
-	claims, exists := c.Get("JWT_PAYLOAD")
-	if !exists {
+func ExtractClaims(c *context.Context) MapClaims {
+	claims := c.Input.GetData("JWT_PAYLOAD")
+	if claims == nil {
 		return make(MapClaims)
 	}
 
@@ -737,9 +740,9 @@ func ExtractClaimsFromToken(token *jwt.Token) MapClaims {
 }
 
 // GetToken help to get the JWT token string
-func GetToken(c *gin.Context) string {
-	token, exists := c.Get("JWT_TOKEN")
-	if !exists {
+func GetToken(c *context.Context) string {
+	token := c.Input.GetData("JWT_TOKEN")
+	if token == nil {
 		return ""
 	}
 
